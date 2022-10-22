@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::oneshot,
+    sync::{mpsc, oneshot},
 };
 
 #[derive(Debug, Component)]
@@ -22,7 +22,7 @@ pub struct Token {
     pub(crate) pair: RwLock<(String, String)>,
     pub(crate) created_at: RwLock<Option<DateTime<Utc>>>,
 
-    tx: Option<oneshot::Sender<()>>,
+    tx: Option<mpsc::Sender<()>>,
     rx: Option<oneshot::Receiver<()>>,
 }
 
@@ -32,7 +32,7 @@ impl ComponentLifecycle for Token {
         *self = Self::initialize().await.expect("initialize token");
 
         let (stop_sender, a_rx) = oneshot::channel();
-        let (b_tx, mut stop_receiver) = oneshot::channel();
+        let (b_tx, mut stop_receiver) = mpsc::channel(1);
 
         self.rx.replace(a_rx);
         self.tx.replace(b_tx);
@@ -66,12 +66,15 @@ impl ComponentLifecycle for Token {
                 }
             }
 
-            // 2. 멈추라는 신호를 받음
-            if stop_receiver.try_recv().is_ok() {
-                break;
+            tokio::select! {
+                // 2. 멈추라는 신호를 받음
+                _ = stop_receiver.recv() => {
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    continue;
+                }
             }
-
-            tokio::time::sleep(Duration::from_secs(10)).await;
         }
 
         // 3. 멈추었음을 알려줌
@@ -80,7 +83,7 @@ impl ComponentLifecycle for Token {
 
     async fn stop(&mut self) {
         // 1. 멈추라는 신호를 보냄
-        self.tx.take().unwrap().send(()).unwrap();
+        self.tx.take().unwrap().send(()).await.unwrap();
 
         // 4. 멈추었음을 확인함
         self.rx.take().unwrap().await.unwrap();

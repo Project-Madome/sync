@@ -47,6 +47,8 @@ async fn main() {
     // 작품 정보 업데이트 container (주기적으로 한달에 한 번?)
     // community container (container<->container 통신) mpsc, receiver를 사용하는 쪽에서 sender를 생성해서 갱신해주어야함 community.update_id_sender(tx);
 
+    // 히토미에서 전체 작품을 훑어서 마도메에 없는 작품이 있을 수도 있으니까 이것도 받아줘야함
+
     /* let state = Arc::new(Mutex::new(State::new()));
     let (id_tx, mut id_rx) = mpsc::channel::<u32>(128);
     let (err_tx, err_rx) = mpsc::channel::<sync::Error>(16);

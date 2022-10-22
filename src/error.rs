@@ -17,7 +17,18 @@ pub enum Error {
 
 #[async_trait::async_trait]
 pub trait SendError<T> {
-    async fn to(self, tx: mpsc::Sender<Error>) -> Option<T>;
+    async fn to(
+        self,
+        id: impl Into<Option<u32>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+    ) -> Option<T>;
+
+    async fn too(
+        self,
+        id: impl Into<Option<u32>> + Send,
+        page: impl Into<Option<usize>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+    ) -> Option<T>;
 }
 
 #[async_trait::async_trait]
@@ -27,11 +38,24 @@ where
     E: Into<Error> + Send,
     F: Future<Output = Result<T, E>> + Send,
 {
-    async fn to(self, tx: mpsc::Sender<Error>) -> Option<T> {
+    async fn to(
+        self,
+        id: impl Into<Option<u32>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+    ) -> Option<T> {
+        self.too(id, None, tx).await
+    }
+
+    async fn too(
+        self,
+        id: impl Into<Option<u32>> + Send,
+        page: impl Into<Option<usize>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+    ) -> Option<T> {
         match self.await {
             Ok(r) => Some(r),
             Err(err) => {
-                tx.send(err.into()).await.unwrap();
+                tx.send((id.into(), page.into(), err.into())).await.unwrap();
                 None
             }
         }

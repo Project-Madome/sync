@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use madome_sdk::api::library;
 use sai::{Component, ComponentLifecycle, Injected};
-use tokio::{sync::oneshot, time::sleep};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::sleep,
+};
 
 use crate::{config::Config, container, SendError};
 
@@ -25,7 +28,7 @@ pub struct Nozomi {
     #[injected]
     token: Injected<container::Token>,
 
-    tx: Option<oneshot::Sender<()>>,
+    tx: Option<mpsc::Sender<()>>,
     rx: Option<oneshot::Receiver<()>>,
 }
 
@@ -33,7 +36,7 @@ pub struct Nozomi {
 impl ComponentLifecycle for Nozomi {
     async fn start(&mut self) {
         let (stop_sender, rx) = oneshot::channel();
-        let (tx, mut stop_receiver) = oneshot::channel();
+        let (tx, mut stop_receiver) = mpsc::channel(1);
 
         self.tx.replace(tx);
         self.rx.replace(rx);
@@ -51,10 +54,14 @@ impl ComponentLifecycle for Nozomi {
         let mut empty_count = 0;
 
         loop {
-            let mut ids = get_ids_from_not_contains(token.as_ref(), &mut state)
-                .to(channel.err())
-                .await
-                .unwrap_or_default();
+            let mut ids = tokio::select! {
+                _ = stop_receiver.recv() => {
+                    break;
+                }
+                ids = get_ids_from_not_contains(token.as_ref(), &mut state).to(None, channel.err_tx()) => {
+                    ids.unwrap_or_default()
+                }
+            };
 
             if ids.is_empty() {
                 empty_count += 1;
@@ -67,7 +74,7 @@ impl ComponentLifecycle for Nozomi {
                 store.sort();
 
                 for id in store.drain(..) {
-                    channel.id().send(id).await.expect("closed id channel");
+                    channel.id_tx().send(id).await.expect("closed id channel");
                 }
 
                 store = Vec::new();
@@ -86,7 +93,7 @@ impl ComponentLifecycle for Nozomi {
     }
 
     async fn stop(&mut self) {
-        self.tx.take().unwrap().send(()).unwrap();
+        self.tx.take().unwrap().send(()).await.unwrap();
 
         self.rx.take().unwrap().await.unwrap();
     }
