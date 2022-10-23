@@ -3,7 +3,8 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::container;
 
-type ErrMsg = (Option<u32>, Option<usize>, crate::Error);
+/// id, page, total_page, error
+type ErrMsg = (Option<u32>, Option<usize>, Option<usize>, crate::Error);
 
 #[derive(Component)]
 #[lifecycle]
@@ -57,11 +58,11 @@ impl Channel {
         rx.recv().await.expect("closed channel")
     }
 
-    pub fn err_tx(&self) -> mpsc::Sender<(Option<u32>, Option<usize>, crate::Error)> {
+    pub fn err_tx(&self) -> mpsc::Sender<ErrMsg> {
         self.err_tx.clone().unwrap()
     }
 
-    pub async fn err_recv(&self) -> (Option<u32>, Option<usize>, crate::Error) {
+    pub async fn err_recv(&self) -> ErrMsg {
         let mut rx = self.err_rx.as_ref().unwrap().lock().await;
         rx.recv().await.expect("closed channel")
     }

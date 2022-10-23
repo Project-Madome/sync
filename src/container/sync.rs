@@ -61,17 +61,17 @@ impl ComponentLifecycle for Sync {
                 }
 
                 // TODO: progress 구현
-                SyncKind::Image(id, page, image, buf) => match image.kind() {
+                SyncKind::Image(id, page, total_page, image, buf) => match image.kind() {
                     crawler::image::ImageKind::Thumbnail => {
                         let _r = sync_thumbnail(token, id, image, buf)
-                            .too(id, 0, channel.err_tx())
+                            .too(id, 0, total_page, channel.err_tx())
                             .await
                             .is_some();
                     }
 
                     crawler::image::ImageKind::Original => {
                         let _r = sync_image(token, id, page, image, buf)
-                            .too(id, page, channel.err_tx())
+                            .too(id, page, total_page, channel.err_tx())
                             .await
                             .is_some();
                     }
@@ -91,14 +91,15 @@ impl ComponentLifecycle for Sync {
 
 pub enum SyncKind {
     About(crawler::model::Gallery),
-    Image(u32, usize, crawler::image::Image, Bytes),
+    // id, page, total_page, image, buf
+    Image(u32, usize, usize, crawler::image::Image, Bytes),
 }
 
 impl Debug for SyncKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let x = match self {
             Self::About(_) => "About",
-            Self::Image(_, _, _, _) => "Image",
+            Self::Image(_, _, _, _, _) => "Image",
         };
 
         write!(f, "SyncKind::{x}")

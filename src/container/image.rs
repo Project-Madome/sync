@@ -38,16 +38,24 @@ impl ComponentLifecycle for Image {
                 }
             };
 
+            let total_page = about.files.len();
+
             'b: for (page, file) in about.files.iter().enumerate().map(|(i, f)| (i + 1, f)) {
                 let image =
                     crawler::image::Image::new(about.id, file, crawler::image::ImageKind::Original)
                         .await;
 
-                match image.download().too(about.id, page, channel.err_tx()).await {
+                match image
+                    .download()
+                    .too(about.id, page, total_page, channel.err_tx())
+                    .await
+                {
                     Some(buf) => {
                         let _r = channel
                             .sync_tx()
-                            .send(container::SyncKind::Image(about.id, page, image, buf))
+                            .send(container::SyncKind::Image(
+                                about.id, page, total_page, image, buf,
+                            ))
                             .await
                             .unwrap();
                     }

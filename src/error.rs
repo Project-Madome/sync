@@ -20,14 +20,15 @@ pub trait SendError<T> {
     async fn to(
         self,
         id: impl Into<Option<u32>> + Send,
-        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Option<usize>, Error)>,
     ) -> Option<T>;
 
     async fn too(
         self,
         id: impl Into<Option<u32>> + Send,
         page: impl Into<Option<usize>> + Send,
-        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+        total_page: impl Into<Option<usize>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Option<usize>, Error)>,
     ) -> Option<T>;
 }
 
@@ -41,21 +42,24 @@ where
     async fn to(
         self,
         id: impl Into<Option<u32>> + Send,
-        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Option<usize>, Error)>,
     ) -> Option<T> {
-        self.too(id, None, tx).await
+        self.too(id, None, None, tx).await
     }
 
     async fn too(
         self,
         id: impl Into<Option<u32>> + Send,
         page: impl Into<Option<usize>> + Send,
-        tx: mpsc::Sender<(Option<u32>, Option<usize>, Error)>,
+        total_page: impl Into<Option<usize>> + Send,
+        tx: mpsc::Sender<(Option<u32>, Option<usize>, Option<usize>, Error)>,
     ) -> Option<T> {
         match self.await {
             Ok(r) => Some(r),
             Err(err) => {
-                tx.send((id.into(), page.into(), err.into())).await.unwrap();
+                tx.send((id.into(), page.into(), total_page.into(), err.into()))
+                    .await
+                    .unwrap();
                 None
             }
         }

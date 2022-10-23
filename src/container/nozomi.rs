@@ -81,11 +81,14 @@ impl ComponentLifecycle for Nozomi {
                 empty_count = 0;
                 state.clear();
 
-                if stop_receiver.try_recv().is_ok() {
-                    break;
-                }
-
-                sleep(Duration::from_secs(180)).await;
+                tokio::select! {
+                    _ = stop_receiver.recv() => {
+                        break;
+                    }
+                    _ = sleep(Duration::from_secs(180)) => {
+                        continue;
+                    }
+                };
             }
         }
 
