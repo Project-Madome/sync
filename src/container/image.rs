@@ -41,9 +41,22 @@ impl ComponentLifecycle for Image {
             let total_page = about.files.len();
 
             'b: for (page, file) in about.files.iter().enumerate().map(|(i, f)| (i + 1, f)) {
-                let image =
-                    crawler::image::Image::new(about.id, file, crawler::image::ImageKind::Original)
-                        .await;
+                log::info!("download_image;id={};page={page}/{total_page}", about.id);
+
+                let image = {
+                    let x = crawler::image::Image::new(
+                        about.id,
+                        file,
+                        crawler::image::ImageKind::Original,
+                    )
+                    .too(about.id, page, total_page, channel.err_tx())
+                    .await;
+
+                    match x {
+                        Some(x) => x,
+                        None => break 'b,
+                    }
+                };
 
                 match image
                     .download()
@@ -58,14 +71,16 @@ impl ComponentLifecycle for Image {
                             ))
                             .await
                             .unwrap();
+                        // TODO: channel이 닫혔을 때 unwrap이 아니라 다른 방법으로 종료시키거나 아니면 채널을 새로 생성하거나 해야 한다
                     }
-
                     None => {
                         break 'b;
                     }
                 }
             }
         }
+
+        log::debug!("shutdown_image");
 
         stop_sender.send(()).unwrap();
     }
