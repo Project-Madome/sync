@@ -119,7 +119,7 @@ async fn sync_about(
 
     library::add_book(
         "https://beta.api.madome.app",
-        token,
+        token.as_behavior(),
         about.id,
         about.title.clone(),
         about.kind.clone(),
@@ -144,7 +144,13 @@ async fn sync_image(
 ) -> crate::Result<()> {
     let path = format!("image/library/{id}/{page}.{}", image.ext());
 
-    file::upload("https://beta.api.madome.app", token, path, buf).await?;
+    file::upload(
+        "https://beta.api.madome.app",
+        token.as_behavior(),
+        path,
+        buf,
+    )
+    .await?;
 
     // TODO: 어딘가에 내역을 기록해야함
 
@@ -159,7 +165,13 @@ async fn sync_thumbnail(
 ) -> crate::Result<()> {
     let path = format!("image/library/{id}/thumbnail.{}", image.ext());
 
-    file::upload("https://beta.api.madome.app", token, path, buf).await?;
+    file::upload(
+        "https://beta.api.madome.app",
+        token.as_behavior(),
+        path,
+        buf,
+    )
+    .await?;
 
     // TODO: 어딘가에 내역을 기록해야함
 

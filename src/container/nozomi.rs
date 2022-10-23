@@ -132,7 +132,12 @@ async fn get_ids_from_not_contains(
 ) -> crate::Result<Vec<u32>> {
     let ids = crawler::nozomi::parse(state.next_page(), state.per_page()).await?;
 
-    let xs = library::get_books_by_ids("https://beta.api.madome.app", token, ids.clone()).await?;
+    let xs = library::get_books_by_ids(
+        "https://beta.api.madome.app",
+        token.as_behavior(),
+        ids.clone(),
+    )
+    .await?;
     let xs = xs.iter().map(|x| x.id).collect::<Vec<_>>();
 
     let ids = ids.into_iter().filter(|id| !xs.contains(id)).collect();

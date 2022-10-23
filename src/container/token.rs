@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{io, ops::Deref, time::Duration};
 
 use chrono::{DateTime, Utc};
 use http_util::{Cookie, SetCookie};
@@ -8,7 +8,7 @@ use madome_sdk::api::{
     TokenBehavior,
 };
 use parking_lot::RwLock;
-use sai::{Component, ComponentLifecycle};
+use sai::{Component, ComponentLifecycle, Injected};
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs::File,
@@ -16,11 +16,15 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-#[derive(Debug, Component)]
+use crate::container;
+
+#[derive(Component)]
 #[lifecycle]
 pub struct Token {
-    pub(crate) pair: RwLock<(String, String)>,
-    pub(crate) created_at: RwLock<Option<DateTime<Utc>>>,
+    #[injected]
+    channel: Injected<container::Channel>,
+
+    inner: Option<TokenRwLock>,
 
     tx: Option<mpsc::Sender<()>>,
     rx: Option<oneshot::Receiver<()>>,
@@ -29,7 +33,7 @@ pub struct Token {
 #[async_trait::async_trait]
 impl ComponentLifecycle for Token {
     async fn start(&mut self) {
-        *self = Self::initialize().await.expect("initialize token");
+        self.initialize().await.expect("initialize token");
 
         let (stop_sender, a_rx) = oneshot::channel();
         let (b_tx, mut stop_receiver) = mpsc::channel(1);
@@ -39,28 +43,26 @@ impl ComponentLifecycle for Token {
 
         loop {
             let now = Utc::now().timestamp();
-            let created_at = self.created_at.read().unwrap();
+            let created_at = { *self.inner.as_ref().unwrap().created_at.read() };
 
             if now - created_at.timestamp() > 10800 {
-                let token = Token {
-                    pair: RwLock::new(self.pair.read().clone()),
-                    created_at: RwLock::new(Some(created_at)),
-                    tx: None,
-                    rx: None,
-                };
+                let token = self.as_behavior();
 
-                match auth::refresh_token_pair("https://beta.api.madome.app", &token).await {
+                match auth::refresh_token_pair("https://beta.api.madome.app", token).await {
                     Ok(_) => {
-                        *self.pair.write() = token.pair.read().clone();
-                        *self.created_at.write() = *token.created_at.read();
+                        // self.behavior.replace(token);
+                        // self.pair = token.pair.read().clone();
+                        // self.created_at = Some(*token.created_at.read());
 
                         if let Err(err) = self.sync().await {
+                            // TODO: send error to channel.err_tx()
                             log::error!("sync_token_pair: {err}");
                         }
                     }
                     Err(err) => {
+                        // TODO: send error to channel.err_tx()
                         log::error!("refresh_token_pair: {err}");
-                        // TODO: send stop signal
+                        // TODO: send stop signal?
                         // panic!("refresh_token_pair: {err}");
                     }
                 }
@@ -71,7 +73,7 @@ impl ComponentLifecycle for Token {
                 _ = stop_receiver.recv() => {
                     break;
                 }
-                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {
                     continue;
                 }
             }
@@ -90,43 +92,27 @@ impl ComponentLifecycle for Token {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct TokenJson {
-    pub access: String,
-    pub refresh: String,
-    pub created_at: DateTime<Utc>,
-}
-
 impl Token {
-    /* fn new() -> Self {
-        Self {
-            pair: Default::default(),
-            created_at: Utc::now(),
-        }
-    } */
-
-    pub async fn initialize() -> io::Result<Self> {
-        let token = if let Ok(mut f) = File::open("./.token.json").await {
+    async fn initialize(&mut self) -> io::Result<()> {
+        if let Ok(mut f) = File::open("./.token.json").await {
             let mut buf = Vec::new();
             f.read_to_end(&mut buf).await?;
 
             let t = serde_json::from_slice::<TokenJson>(&buf).unwrap();
 
-            Token {
+            self.inner.replace(TokenRwLock {
                 pair: RwLock::new((t.access, t.refresh)),
-                created_at: RwLock::new(Some(t.created_at)),
-                tx: None,
-                rx: None,
-            }
+                created_at: RwLock::new(t.created_at),
+            });
         } else {
             // Token::new()
             panic!("please write the `.token.json`")
-        };
+        }
 
-        Ok(token)
+        Ok(())
     }
 
-    pub async fn sync(&self) -> io::Result<()> {
+    async fn sync(&self) -> io::Result<()> {
         let serialized = serde_json::to_string_pretty(&self.to_json()).unwrap();
 
         let mut f = File::open("./.token.json").await?;
@@ -136,8 +122,10 @@ impl Token {
     }
 
     fn to_json(&self) -> TokenJson {
-        let (access, refresh) = self.pair.read().clone();
-        let created_at = self.created_at.read().expect("read token.created_at");
+        let x = self.inner.as_ref().unwrap();
+
+        let (access, refresh) = x.pair.read().clone();
+        let created_at = *x.created_at.read();
 
         TokenJson {
             access,
@@ -145,9 +133,40 @@ impl Token {
             created_at,
         }
     }
+
+    /* fn to_behavior(&self) -> TokenRwLock {
+        TokenRwLock {
+            pair: RwLock::new(self.pair.clone()),
+            created_at: RwLock::new(self.created_at.unwrap()),
+        }
+    } */
+
+    pub fn as_behavior(&self) -> &dyn TokenBehavior {
+        &**self
+    }
 }
 
-impl TokenBehavior for Token {
+impl Deref for Token {
+    type Target = TokenRwLock;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().unwrap()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TokenJson {
+    pub access: String,
+    pub refresh: String,
+    pub created_at: DateTime<Utc>,
+}
+
+pub struct TokenRwLock {
+    pub pair: RwLock<(String, String)>,
+    pub created_at: RwLock<DateTime<Utc>>,
+}
+
+impl TokenBehavior for TokenRwLock {
     fn update(&self, headers: &http::HeaderMap) {
         let mut set_cookie = SetCookie::from_headers(headers);
 
@@ -156,7 +175,7 @@ impl TokenBehavior for Token {
 
         if let (Some(x), Some(y)) = (x, y) {
             *self.pair.write() = (x, y);
-            *self.created_at.write() = Some(Utc::now());
+            *self.created_at.write() = Utc::now();
         }
     }
 

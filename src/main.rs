@@ -33,7 +33,7 @@
 async fn main() {
     println!("Hello, world!");
 
-    let madome_url = "https://test.api.madome.app";
+    // let madome_url = "https://test.api.madome.app";
 
     // 마도메 헬스체크를 통해 마도메와의 연결이 원활하지 않을 경우에는 앱 자체를 멈춰야 함
     // 실패한 작업은 진행 중인 작업이 없을 경우에만 시도함
