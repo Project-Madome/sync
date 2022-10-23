@@ -79,6 +79,8 @@ impl ComponentLifecycle for Token {
             }
         }
 
+        log::debug!("shutdown_token");
+
         // 3. 멈추었음을 알려줌
         stop_sender.send(()).unwrap();
     }
@@ -156,14 +158,14 @@ impl Deref for Token {
 
 #[derive(Serialize, Deserialize)]
 pub struct TokenJson {
-    pub access: String,
-    pub refresh: String,
-    pub created_at: DateTime<Utc>,
+    pub(crate) access: String,
+    pub(crate) refresh: String,
+    pub(crate) created_at: DateTime<Utc>,
 }
 
 pub struct TokenRwLock {
-    pub pair: RwLock<(String, String)>,
-    pub created_at: RwLock<DateTime<Utc>>,
+    pair: RwLock<(String, String)>,
+    created_at: RwLock<DateTime<Utc>>,
 }
 
 impl TokenBehavior for TokenRwLock {

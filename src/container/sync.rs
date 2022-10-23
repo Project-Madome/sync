@@ -50,12 +50,14 @@ impl ComponentLifecycle for Sync {
                 //
                 // draft 하는 도중에도 에러가 날 수 있으니까 이것도 저장해놨따가 아무것도 안할때 틈틈이 시도
                 SyncKind::About(about) => {
+                    log::info!("sync_about;id={}", about.id);
                     let r = sync_about(token, &about)
                         .to(about.id, channel.err_tx())
                         .await
                         .is_some();
 
                     if r {
+                        log::debug!("sync_about;send_about");
                         channel.about_tx().send(about).await.unwrap();
                     }
                 }
@@ -63,6 +65,7 @@ impl ComponentLifecycle for Sync {
                 // TODO: progress 구현
                 SyncKind::Image(id, page, total_page, image, buf) => match image.kind() {
                     crawler::image::ImageKind::Thumbnail => {
+                        log::info!("sync_thumbnail;id={id}");
                         let _r = sync_thumbnail(token, id, image, buf)
                             .too(id, 0, total_page, channel.err_tx())
                             .await
@@ -70,6 +73,7 @@ impl ComponentLifecycle for Sync {
                     }
 
                     crawler::image::ImageKind::Original => {
+                        log::info!("sync_image;id={id};page={page}/{total_page}");
                         let _r = sync_image(token, id, page, image, buf)
                             .too(id, page, total_page, channel.err_tx())
                             .await
@@ -78,6 +82,8 @@ impl ComponentLifecycle for Sync {
                 },
             }
         }
+
+        log::debug!("shutdown_sync");
 
         stop_sender.send(()).unwrap()
     }
