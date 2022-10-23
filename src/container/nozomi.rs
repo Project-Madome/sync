@@ -54,22 +54,27 @@ impl ComponentLifecycle for Nozomi {
         let mut empty_count = 0;
 
         loop {
-            let mut ids = tokio::select! {
-                _ = stop_receiver.recv() => {
-                    break;
-                }
-                ids = get_ids_from_not_contains(token.as_ref(), &mut state).to(None, channel.err_tx()) => {
-                    ids.unwrap_or_default()
-                }
-            };
+            log::debug!(
+                "nozomi_parse;page={};per_page={}",
+                state.page(),
+                state.per_page()
+            );
+            let mut ids = get_ids_from_not_contains(token.as_ref(), &mut state)
+                .to(None, channel.err_tx())
+                .await
+                .unwrap_or_default();
 
             if ids.is_empty() {
+                log::debug!("nozomi_parse;empty");
                 empty_count += 1;
             } else {
+                log::debug!("nozomi_parse;not_empty");
+                empty_count = 0;
                 store.append(&mut ids);
             }
 
             if empty_count >= 3 {
+                log::debug!("nozomi_parse;send_ids");
                 // asc
                 store.sort();
 
@@ -77,9 +82,13 @@ impl ComponentLifecycle for Nozomi {
                     channel.id_tx().send(id).await.expect("closed id channel");
                 }
 
+                log::debug!("nozomi_parse;clear_state");
+
                 store = Vec::new();
                 empty_count = 0;
                 state.clear();
+
+                log::info!("nozomi_parse;sleep(180s)");
 
                 tokio::select! {
                     _ = stop_receiver.recv() => {
@@ -91,6 +100,8 @@ impl ComponentLifecycle for Nozomi {
                 };
             }
         }
+
+        log::debug!("shutdown_nozomi");
 
         stop_sender.send(()).unwrap();
     }
@@ -119,6 +130,10 @@ impl State {
 
     pub fn per_page(&self) -> usize {
         self.per_page
+    }
+
+    pub fn page(&self) -> usize {
+        self.page
     }
 
     pub fn clear(&mut self) {
