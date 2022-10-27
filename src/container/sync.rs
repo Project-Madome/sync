@@ -5,7 +5,19 @@ use madome_sdk::api::{file, library};
 use sai::{Component, ComponentLifecycle, Injected};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{container, SendError};
+use crate::{
+    container::{self, ProgressKind},
+    SendError,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    LibrarySdk(#[from] library::Error),
+
+    #[error("{0}")]
+    FileSdk(#[from] file::Error),
+}
 
 #[derive(Component)]
 #[lifecycle]
@@ -29,63 +41,88 @@ impl ComponentLifecycle for Sync {
         self.tx.replace(tx);
         self.rx.replace(rx);
 
-        let Self { channel, token, .. } = self;
+        let channel = self.channel.clone();
+        let token = self.token.clone();
 
-        loop {
-            let received = tokio::select! {
-                _ = stop_receiver.recv() => {
-                    break;
-                }
-                received = channel.sync_recv() => {
-                    received
-                }
-            };
+        tokio::spawn(async move {
+            let token = &token;
 
-            match received {
-                // TODO: 이미지를 업로드 하기 전에 작품 정보를 업로드 하는데
-                // library서버에서 해당 작품이 이미지 업로드가 된 작품인지 아닌지를 구별할 방법이 필요함
-                //
-                // 처음에 올릴 때는 pre-release 같은 느낌으로 외부에 변경을 덜 주는 방식으로 library 서버에서 변경하고,
-                // 이후에 이미지 업로드가 다 됐따 하면 draft하는 방식
-                //
-                // draft 하는 도중에도 에러가 날 수 있으니까 이것도 저장해놨따가 아무것도 안할때 틈틈이 시도
-                SyncKind::About(about) => {
-                    log::info!("sync_about;id={}", about.id);
-                    let r = sync_about(token, &about)
-                        .to(about.id, channel.err_tx())
-                        .await
-                        .is_some();
-
-                    if r {
-                        log::debug!("sync_about;send_about");
-                        channel.about_tx().send(about).await.unwrap();
+            loop {
+                let received = tokio::select! {
+                    _ = stop_receiver.recv() => {
+                        break;
                     }
-                }
+                    received = channel.sync_recv() => {
+                        received
+                    }
+                };
 
-                // TODO: progress 구현
-                SyncKind::Image(id, page, total_page, image, buf) => match image.kind() {
-                    crawler::image::ImageKind::Thumbnail => {
-                        log::info!("sync_thumbnail;id={id}");
-                        let _r = sync_thumbnail(token, id, image, buf)
-                            .too(id, 0, total_page, channel.err_tx())
+                match received {
+                    // TODO: 이미지를 업로드 하기 전에 작품 정보를 업로드 하는데
+                    // library서버에서 해당 작품이 이미지 업로드가 된 작품인지 아닌지를 구별할 방법이 필요함
+                    //
+                    // 처음에 올릴 때는 pre-release 같은 느낌으로 외부에 변경을 덜 주는 방식으로 library 서버에서 변경하고,
+                    // 이후에 이미지 업로드가 다 됐따 하면 release하는 방식
+                    //
+                    // release 하는 도중에도 에러가 날 수 있으니까 이것도 저장해놨따가 아무것도 안할때 틈틈이 시도
+                    SyncKind::About(about) => {
+                        log::info!("sync_about;id={}", about.id);
+
+                        let r = sync_about(token, &about)
+                            .to(about.id, channel.err_tx())
+                            .await
+                            .is_some();
+
+                        if r {
+                            // log::debug!("sync_about;send_about");
+                            channel.about_tx().send(about).await.unwrap();
+                        }
+                    }
+
+                    SyncKind::Image(id, page, total_page, image, buf) => match image.kind() {
+                        crawler::image::ImageKind::Thumbnail => {
+                            log::info!("sync_thumbnail;id={id}");
+
+                            let _r = sync_thumbnail(token, id, image, buf)
+                                .too(id, 0, total_page, channel.err_tx())
+                                .await
+                                .is_some();
+                        }
+
+                        crawler::image::ImageKind::Original => {
+                            log::info!("sync_image;id={id};page={page}/{total_page}");
+
+                            let r = sync_image(token, id, page, image, buf)
+                                .too(id, page, total_page, channel.err_tx())
+                                .await
+                                .is_some();
+
+                            if r {
+                                // progress 갱신
+                                channel
+                                    .progress_tx()
+                                    .send(ProgressKind::Image(id, page, total_page))
+                                    .await
+                                    .unwrap()
+                            }
+                        }
+                    },
+
+                    SyncKind::Release(id) => {
+                        log::info!("release_book;id={id}");
+
+                        let _r = release_book(token, id)
+                            .to(id, channel.err_tx())
                             .await
                             .is_some();
                     }
-
-                    crawler::image::ImageKind::Original => {
-                        log::info!("sync_image;id={id};page={page}/{total_page}");
-                        let _r = sync_image(token, id, page, image, buf)
-                            .too(id, page, total_page, channel.err_tx())
-                            .await
-                            .is_some();
-                    }
-                },
+                }
             }
-        }
 
-        log::debug!("shutdown_sync");
+            log::debug!("shutdown_sync");
 
-        stop_sender.send(()).unwrap()
+            stop_sender.send(()).unwrap()
+        });
     }
 
     async fn stop(&mut self) {
@@ -97,25 +134,30 @@ impl ComponentLifecycle for Sync {
 
 pub enum SyncKind {
     About(crawler::model::Gallery),
-    // id, page, total_page, image, buf
+    /// id, page, total_page, image, buf
     Image(u32, usize, usize, crawler::image::Image, Bytes),
+    Release(u32),
 }
 
 impl Debug for SyncKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let x = match self {
-            Self::About(_) => "About",
-            Self::Image(_, _, _, _, _) => "Image",
+            Self::About(x) => format!("About({})", x.id),
+            Self::Image(id, page, total, _, _) => format!("Image({id}, {page}, {total})"),
+            Self::Release(id) => format!("Release({id})"),
         };
 
         write!(f, "SyncKind::{x}")
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn sync_about(
     token: &container::Token,
     about: &crawler::model::Gallery,
-) -> crate::Result<()> {
+) -> Result<(), Error> {
+    let (_lock, token) = token.as_behavior();
+
     let tags = about
         .tags
         .clone()
@@ -125,7 +167,7 @@ async fn sync_about(
 
     library::add_book(
         "https://beta.api.madome.app",
-        token.as_behavior(),
+        token,
         about.id,
         about.title.clone(),
         about.kind.clone(),
@@ -136,50 +178,47 @@ async fn sync_about(
     )
     .await?;
 
-    // TODO: 어딘가에 내역을 기록해야함
-
     Ok(())
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn sync_image(
     token: &container::Token,
     id: u32,
     page: usize,
     image: crawler::image::Image,
     buf: Bytes,
-) -> crate::Result<()> {
+) -> Result<(), Error> {
+    let (_lock, token) = token.as_behavior();
+
     let path = format!("image/library/{id}/{page}.{}", image.ext());
 
-    file::upload(
-        "https://beta.api.madome.app",
-        token.as_behavior(),
-        path,
-        buf,
-    )
-    .await?;
-
-    // TODO: 어딘가에 내역을 기록해야함
+    file::upload("https://beta.api.madome.app", token, path, buf).await?;
 
     Ok(())
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn sync_thumbnail(
     token: &container::Token,
     id: u32,
     image: crawler::image::Image,
     buf: Bytes,
-) -> crate::Result<()> {
+) -> Result<(), Error> {
+    let (_lock, token) = token.as_behavior();
+
     let path = format!("image/library/{id}/thumbnail.{}", image.ext());
 
-    file::upload(
-        "https://beta.api.madome.app",
-        token.as_behavior(),
-        path,
-        buf,
-    )
-    .await?;
+    file::upload("https://beta.api.madome.app", token, path, buf).await?;
 
-    // TODO: 어딘가에 내역을 기록해야함
+    Ok(())
+}
+
+#[allow(clippy::await_holding_lock)]
+async fn release_book(token: &container::Token, id: u32) -> Result<(), Error> {
+    let (_lock, token) = token.as_behavior();
+
+    library::release_book("https://beta.api.madome.app", token, id).await?;
 
     Ok(())
 }
