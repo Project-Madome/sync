@@ -7,14 +7,14 @@ edition = "2021"
 
 [dependencies]
 chrono = { version = "0.4.19", features = ["serde"] }
-tokio = { version = "1.20.1", features = ["macros", "rt-multi-thread", "fs"] }
+tokio = { version = "1.20.1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
 serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
 # madome-sdk = { git = "https://github.com/Project-Madome/madome-sdk-rs", tag = "0.6.2" }
 madome-sdk = { path = "../madome-sdk" }
 http-util = { git = "https://github.com/syrflover/util-rs", tag = "0.4.4" }
 http = "0.2.8"
-parking_lot = { version = "0.12.1", features = ["serde"] }
+parking_lot = { version = "0.12.1", features = ["serde", "send_guard"] }
 crawler = { git = "https://github.com/Project-Madome/crawler" }
 # crawler = { path = "../crawler" }
 thiserror = "1.0.32"
@@ -24,3 +24,5 @@ log = "0.4.17"
 sai = "0.1.4"
 dotenv = "0.15.0"
 bytes = "1.2.1"
+log4rs-date-appender = { git = "https://github.com/syrflover/log4rs-date-appender", tag = "0.1.1" }
+async-tungstenite = { version = "0.18.0", features = ["tokio-rustls-native-certs"] }

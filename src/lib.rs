@@ -4,6 +4,7 @@ pub mod error;
 mod registry;
 
 pub use error::{Error, SendError};
+pub use registry::RootRegistry;
 
 pub type Result<T> = std::result::Result<T, crate::Error>;
 
