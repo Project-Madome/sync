@@ -9,6 +9,15 @@ use tokio::{
 
 use crate::{config::Config, container, SendError};
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Crawler: {0}")]
+    Crawler(#[from] crawler::Error),
+
+    #[error("Library Sdk: {0}")]
+    LibrarySdk(#[from] library::Error),
+}
+
 /// # Nozomi
 ///
 /// 해당 컨테이너는 작품의 id를 히토미로부터 가져와서, 마도메에 존재하지 않는 id만 걸러서 다른 컨테이너에게 보냅니다.
@@ -41,69 +50,68 @@ impl ComponentLifecycle for Nozomi {
         self.tx.replace(tx);
         self.rx.replace(rx);
 
-        let Self {
-            config,
-            channel,
-            token,
-            ..
-        } = self;
+        let config = self.config.clone();
+        let channel = self.channel.clone();
+        let token = self.token.clone();
 
-        let mut store = Vec::<u32>::new();
-        let mut state = State::new(config.per_page());
+        tokio::spawn(async move {
+            let mut store = Vec::<u32>::new();
+            let mut state = State::new(config.per_page());
 
-        let mut empty_count = 0;
+            let mut empty_count = 0;
 
-        loop {
-            log::debug!(
-                "nozomi_parse;page={};per_page={}",
-                state.page(),
-                state.per_page()
-            );
-            let mut ids = get_ids_from_not_contains(token.as_ref(), &mut state)
-                .to(None, channel.err_tx())
-                .await
-                .unwrap_or_default();
+            loop {
+                log::debug!(
+                    "nozomi_parse;page={};per_page={}",
+                    state.page(),
+                    state.per_page()
+                );
+                let mut ids = get_ids_from_not_contains(token.as_ref(), &mut state)
+                    .to(None, channel.err_tx())
+                    .await
+                    .unwrap_or_default();
 
-            if ids.is_empty() {
-                log::debug!("nozomi_parse;empty");
-                empty_count += 1;
-            } else {
-                log::debug!("nozomi_parse;not_empty");
-                empty_count = 0;
-                store.append(&mut ids);
-            }
-
-            if empty_count >= 3 {
-                log::debug!("nozomi_parse;send_ids");
-                // asc
-                store.sort();
-
-                for id in store.drain(..) {
-                    channel.id_tx().send(id).await.expect("closed id channel");
+                if ids.is_empty() {
+                    log::debug!("nozomi_parse;empty");
+                    empty_count += 1;
+                } else {
+                    log::debug!("nozomi_parse;not_empty");
+                    empty_count = 0;
+                    store.append(&mut ids);
                 }
 
-                log::debug!("nozomi_parse;clear_state");
+                if empty_count >= 3 {
+                    log::debug!("nozomi_parse;send_ids");
+                    // asc
+                    store.sort();
 
-                store = Vec::new();
-                empty_count = 0;
-                state.clear();
-
-                log::info!("nozomi_parse;sleep(180s)");
-
-                tokio::select! {
-                    _ = stop_receiver.recv() => {
-                        break;
+                    for id in store.drain(..) {
+                        channel.id_tx().send(id).await.expect("closed id channel");
                     }
-                    _ = sleep(Duration::from_secs(180)) => {
-                        continue;
-                    }
-                };
+
+                    log::debug!("nozomi_parse;clear_state");
+
+                    store = Vec::new();
+                    empty_count = 0;
+                    state.clear();
+
+                    log::info!("nozomi_parse;sleep(180s)");
+
+                    tokio::select! {
+                        _ = stop_receiver.recv() => {
+                            break;
+                        }
+                        _ = sleep(Duration::from_secs(180)) => {
+                            continue;
+                        }
+                    };
+                }
             }
-        }
 
-        log::debug!("shutdown_nozomi");
+            log::debug!("shutdown_nozomi");
 
-        stop_sender.send(()).unwrap();
+            stop_sender.send(()).unwrap();
+        });
     }
 
     async fn stop(&mut self) {
@@ -141,18 +149,16 @@ impl State {
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 async fn get_ids_from_not_contains(
     token: &container::Token,
     state: &mut State,
-) -> crate::Result<Vec<u32>> {
+) -> Result<Vec<u32>, Error> {
+    let (_lock, token) = token.as_behavior();
+
     let ids = crawler::nozomi::parse(state.next_page(), state.per_page()).await?;
 
-    let xs = library::get_books_by_ids(
-        "https://beta.api.madome.app",
-        token.as_behavior(),
-        ids.clone(),
-    )
-    .await?;
+    let xs = library::get_books_by_ids("https://beta.api.madome.app", token, ids.clone()).await?;
     let xs = xs.iter().map(|x| x.id).collect::<Vec<_>>();
 
     let ids = ids.into_iter().filter(|id| !xs.contains(id)).collect();

@@ -1,10 +1,28 @@
 use std::future::Future;
 
-use madome_sdk::api::{file, library};
 use tokio::sync::mpsc;
+
+use crate::container;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Token: {0}")]
+    Token(#[from] container::token::Error),
+
+    #[error("Sync: {0}")]
+    Sync(#[from] container::sync::Error),
+
+    #[error("About: {0}")]
+    About(#[from] container::about::Error),
+
+    #[error("Image: {0}")]
+    Image(#[from] container::image::Error),
+
+    #[error("Nozomi: {0}")]
+    Nozomi(#[from] container::nozomi::Error),
+    /* #[error("Auth Sdk: {0}")]
+    AuthSdk(#[from] auth::Error),
+
     #[error("Crawler: {0}")]
     Crawler(#[from] crawler::Error),
 
@@ -13,6 +31,7 @@ pub enum Error {
 
     #[error("File Sdk: {0}")]
     FileSdk(#[from] file::Error),
+    */
 }
 
 #[async_trait::async_trait]
